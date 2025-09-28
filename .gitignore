@@ -5,8 +5,3 @@ dev.db
 *.sqlite
 blog.db
 
-
-curl -X POST http://localhost:3000/todos \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6MSwiaWF0IjoxNzU5MDMzMTI4LCJleHAiOjE3NTkwMzY3Mjh9.zc6r173GdRGIMZ80D_ybkWe5EkQhZhHah2c4hlB8vBg" \
-  -d '{"title":"Buy milk"}'
