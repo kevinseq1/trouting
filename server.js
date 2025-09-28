@@ -1,14 +1,16 @@
-// Import Express framework
-const express = require('express');
-
-// Import our Todo model to interact with the database
+const authenticateToken = require('./Middleware/auth');
+const jwt = require('jsonwebtoken');
+const User = require('./Models/user');
 const Todo = require('./Models/todo');
+const express = require('express');
+const dotenv = require('dotenv');  
+const db = require('./db');
 
-// Create an Express application instance
-const app = express();
+const app = express();                 // Create an Express application instance
+app.use(express.json());               // Middleware: parse incoming JSON requests automatically
+app.use('/todos', authenticateToken);  // Authenticate all /todo routes
 
-// Middleware: parse incoming JSON requests automatically
-app.use(express.json());
+dotenv.config();                       // Load environment variables from .env file
 
 // ----------------------------
 // Routes / Controllers
@@ -17,60 +19,87 @@ app.use(express.json());
 // GET /todos
 // Returns all todos from the database
 app.get('/todos', (req, res) => {
-  const todos = Todo.findAll(); // fetch all todos
+  // const todos = Todo.findAll(); // fetch all todos
+  const todos = db.prepare('SELECT * FROM todos WHERE user_id = ?').all(req.user.id);
   res.status(200).json(todos); // 200 OK + respond with JSON array
 });
 
 // GET /todos/:id
-// Returns a single todo by ID
+// Returns a single todo by ID (Must belong to the logged-in user)
 app.get('/todos/:id', (req, res) => {
-  const { id } = req.params; // get todo id from URL
-  const todo = Todo.findById(id); // fetch from DB
-  if (todo) {
-    res.status(200).json(todo); // 200 OK + return todo
-  } else {
-    res.status(404).send('Todo not found'); // ID doesn't exist
+  const todo = db.prepare('SELECT * FROM todos WHERE id = ? AND user_id = ?').get(req.params.id, req.user.id);
+  if (!todo) {
+    return res.status(404).json({ error: 'Todo not found' });
   }
+  res.status(200).json(todo);
 });
 
 // POST /todos
 // Creates a new todo item
 app.post('/todos', (req, res) => {
-  const { title } = req.body; // get 'title' from request body
-  if (!title) {
-    // basic validation: title is required
-    return res.status(400).json({ error: 'Title is required' });
-  }
-  const newTodo = Todo.create(title); // insert into DB
-  res.status(201).json(newTodo); // respond with created object
+  const { title } = req.body;
+  const stmt = db.prepare('INSERT INTO todos (title, user_id) VALUES (?, ?)');
+  const result = stmt.run(title, req.user.id);
+  res.status(201).json({ id: result.lastInsertRowid, title, completed: 0 });
 });
 
 // PUT /todos/:id
 // Updates a todo item by ID
 app.put('/todos/:id', (req, res) => {
-  const { id } = req.params; // get todo id from URL
-  const { title, completed } = req.body; // fields to update
-  const updatedTodo = Todo.update(id, { title, completed }); // update in DB
+  const { title, completed } = req.body;
+  const stmt = db.prepare('UPDATE todos SET title = ?, completed = ? WHERE id = ? AND user_id = ?');
+  const result = stmt.run(title, completed, req.params.id, req.user.id);
 
-  if (updatedTodo) {
-    res.status(200).json(updatedTodo); // 200 OK + return updated todo
-  } else {
-    res.status(404).send('Todo not found'); // handle invalid ID
+  if (result.changes === 0) {
+    return res.status(404).json({ error: 'Todo not found or not yours' });
   }
+  res.status(200).json({ message: 'Todo updated' });
 });
 
 // DELETE /todos/:id
 // Deletes a todo item by ID
 app.delete('/todos/:id', (req, res) => {
-  const { id } = req.params; // get todo id from URL
-  const success = Todo.remove(id); // delete from DB
+  const stmt = db.prepare('DELETE FROM todos WHERE id = ? AND user_id = ?');
+  const result = stmt.run(req.params.id, req.user.id);
 
-  if (success) {
-    res.status(204).send(); // 204 No Content for successful deletion
-  } else {
-    res.status(404).send('Todo not found'); // handle invalid ID
+  if (result.changes === 0) {
+    return res.status(404).json({ error: 'Todo not found or not yours' });
+  }
+  res.status(200).json({ message: 'Todo deleted' });
+});
+
+// POST /register
+// Creates a new user
+app.post('/register', (req, res) => {
+  const { username, password } = req.body;
+  if (!username || !password) {
+    return res.status(400).json({ error: 'Username and password required' });
+  }
+
+  try {
+    const newUser = User.create(username, password);
+    res.status(201).json(newUser);
+  } catch (err) {
+    res.status(400).json({ error: 'Username already taken' });
   }
 });
+
+// POST /login
+// Authenticates a user and returns a JWT
+app.post(`/login`, (req, res) => {
+  const { username, password } = req.body;
+  const user = User.findByUsername(username);
+
+  if (!user || !User.verifyPassword(user, password)) {
+    return res.status(401).json({ error: 'Invalid credentials' });
+  }
+
+  // Create a token with user ID
+  const token = jwt.sign({ id: user.id }, process.env.JWT_SECRET, { expiresIn: '1h' });
+  res.json({ token });
+
+});
+
 
 // ----------------------------
 // Start the server
